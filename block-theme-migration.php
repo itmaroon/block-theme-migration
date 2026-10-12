@@ -2,8 +2,8 @@
 /**
  * Plugin Name:       BLOCK THEME MIGRATION
  * Description:       Exports distributable block themes and maps their templates to destination-site content.
- * Version:           0.5.6
- * Requires at least: 6.4
+ * Version:           0.5.8
+ * Requires at least: 6.6
  * Requires PHP:      8.1
  * Author:            Web Creator ITmaroon
  * License:           GPL-2.0-or-later
@@ -14,8 +14,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once __DIR__ . '/includes/class-datamodel.php';
+require_once __DIR__ . '/includes/class-dependencies.php';
+require_once __DIR__ . '/includes/class-inspector.php';
+require_once __DIR__ . '/includes/class-binder.php';
+require_once __DIR__ . '/includes/class-binding.php';
+require_once __DIR__ . '/includes/class-sanitizer.php';
+
 final class Itmar_Block_Theme_Migration {
-	private const MENU_SLUG        = 'itmar-block-theme-migration';
+	public const MENU_SLUG         = 'itmar-block-theme-migration';
 	private const RESULT_TRANSIENT = 'itmar_btm_result_';
 	/** Legacy per-user transient prefix retained for one-time migration. */
 	private const MAP_TRANSIENT    = 'itmar_btm_map_';
@@ -48,7 +55,15 @@ final class Itmar_Block_Theme_Migration {
 		'privacy-policy',
 	);
 
+	/** 書き出しから外す項目（今回の書き出しだけ。保存しない） */
+	private static array $export_excluded = array( 'templates' => array(), 'parts' => array() );
+
+	/** デモ用の書き出し（リンクとメディアを残す。配布には使わない） */
+	private static bool $demo_export = false;
+
 	public static function init(): void {
+		Itmar_BTM_Inspector::init();
+		Itmar_BTM_Binding::init();
 		add_action( 'admin_menu', array( __CLASS__, 'register_menu' ) );
 		add_action( 'after_setup_theme', array( __CLASS__, 'maybe_refresh_pattern_cache' ), 1 );
 		add_action( 'admin_post_itmar_btm_export', array( __CLASS__, 'download_export' ) );
@@ -73,7 +88,7 @@ final class Itmar_Block_Theme_Migration {
 		}
 
 		$view = isset( $_GET['view'] ) ? sanitize_key( wp_unslash( $_GET['view'] ) ) : 'export';
-		if ( ! in_array( $view, array( 'export', 'mapping' ), true ) ) {
+		if ( ! in_array( $view, array( 'export', 'mapping', Itmar_BTM_Inspector::VIEW, Itmar_BTM_Binding::VIEW ), true ) ) {
 			$view = 'export';
 		}
 		$base_url = admin_url( 'tools.php?page=' . self::MENU_SLUG );
@@ -82,10 +97,16 @@ final class Itmar_Block_Theme_Migration {
 			<h1><?php echo esc_html__( 'Theme Migration', 'block-theme-migration' ); ?></h1>
 			<nav class="nav-tab-wrapper" aria-label="<?php echo esc_attr__( 'Theme Migration sections', 'block-theme-migration' ); ?>">
 				<a href="<?php echo esc_url( add_query_arg( 'view', 'export', $base_url ) ); ?>" class="nav-tab <?php echo 'export' === $view ? 'nav-tab-active' : ''; ?>"><?php echo esc_html__( 'Distribution Export', 'block-theme-migration' ); ?></a>
+				<a href="<?php echo esc_url( add_query_arg( 'view', Itmar_BTM_Inspector::VIEW, $base_url ) ); ?>" class="nav-tab <?php echo Itmar_BTM_Inspector::VIEW === $view ? 'nav-tab-active' : ''; ?>"><?php echo esc_html__( 'Inspection', 'block-theme-migration' ); ?></a>
+				<a href="<?php echo esc_url( add_query_arg( 'view', Itmar_BTM_Binding::VIEW, $base_url ) ); ?>" class="nav-tab <?php echo Itmar_BTM_Binding::VIEW === $view ? 'nav-tab-active' : ''; ?>"><?php echo esc_html__( 'Binding', 'block-theme-migration' ); ?></a>
 				<a href="<?php echo esc_url( add_query_arg( 'view', 'mapping', $base_url ) ); ?>" class="nav-tab <?php echo 'mapping' === $view ? 'nav-tab-active' : ''; ?>"><?php echo esc_html__( 'Template Mapping', 'block-theme-migration' ); ?></a>
 			</nav>
 			<?php
-			if ( 'mapping' === $view ) {
+			if ( Itmar_BTM_Inspector::VIEW === $view ) {
+				Itmar_BTM_Inspector::render();
+			} elseif ( Itmar_BTM_Binding::VIEW === $view ) {
+				Itmar_BTM_Binding::render();
+			} elseif ( 'mapping' === $view ) {
 				self::render_mapping_page();
 			} else {
 				self::render_export_page();
@@ -118,7 +139,8 @@ final class Itmar_Block_Theme_Migration {
 							<th><?php echo esc_html__( 'Exported template', 'block-theme-migration' ); ?></th>
 							<th><?php echo esc_html__( 'Make assignable', 'block-theme-migration' ); ?></th>
 							<th><?php echo esc_html__( 'Allowed destination types', 'block-theme-migration' ); ?></th>
-						</tr></thead>
+							<th><?php echo esc_html__( 'Leave out of the ZIP', 'block-theme-migration' ); ?></th>
+							</tr></thead>
 						<tbody>
 						<?php foreach ( $templates as $template ) : ?>
 							<?php $automatic = self::is_automatically_assigned_template( $template->slug ); ?>
@@ -130,12 +152,19 @@ final class Itmar_Block_Theme_Migration {
 									<label><input type="radio" name="allowed_targets[<?php echo esc_attr( $template->slug ); ?>]" value="single" <?php disabled( $automatic ); ?>> <?php echo esc_html__( 'Post type single', 'block-theme-migration' ); ?></label>&nbsp;&nbsp;
 									<label><input type="radio" name="allowed_targets[<?php echo esc_attr( $template->slug ); ?>]" value="archive" <?php disabled( $automatic ); ?>> <?php echo esc_html__( 'Post type archive', 'block-theme-migration' ); ?></label>
 									<?php if ( $automatic ) : ?><br><span class="description"><?php echo esc_html__( 'Automatically applied by the WordPress template hierarchy.', 'block-theme-migration' ); ?></span><?php endif; ?>
-								</td>
-							</tr>
+									</td>
+									<td><label><input type="checkbox" name="exclude_templates[<?php echo esc_attr( $template->slug ); ?>]" value="1"> <?php echo esc_html__( 'Leave out', 'block-theme-migration' ); ?></label></td>
+									</tr>
 						<?php endforeach; ?>
 						</tbody>
 					</table>
-					<p class="description"><?php echo esc_html__( 'Unmarked templates remain in the ZIP but do not appear on the destination mapping screen.', 'block-theme-migration' ); ?></p>
+					<p class="description"><?php echo esc_html__( 'Unmarked templates remain in the ZIP but do not appear on the destination mapping screen. Templates marked “Leave out” are not put in the ZIP at all.', 'block-theme-migration' ); ?></p>
+
+					<?php self::render_export_parts_table(); ?>
+					<p>
+						<label><input type="checkbox" name="demo_mode" value="1"> <strong><?php echo esc_html__( 'Demo export', 'block-theme-migration' ); ?></strong></label><br>
+						<span class="description"><?php echo esc_html__( 'For a demo site (for example WordPress Playground). Links to pages and uploaded media are kept, and the site address is made relative, so the pages link to each other once pages with the same slugs exist. E-mail addresses, IDs and settings of outside services are still removed. Do not use this ZIP for distribution.', 'block-theme-migration' ); ?></span>
+					</p>
 					<?php submit_button( __( 'Download distribution ZIP', 'block-theme-migration' ) ); ?>
 				</form>
 			<?php endif; ?>
@@ -176,6 +205,7 @@ final class Itmar_Block_Theme_Migration {
 						?>
 					</p></div>
 				<?php endif; ?>
+				<?php Itmar_BTM_Dependencies::render( $manifest ); ?>
 				<?php self::render_pattern_import_form( $manifest ); ?>
 				<?php self::render_mapping_form( $manifest, $saved_mapping, $deleted_sources ); ?>
 				<?php self::render_managed_templates(); ?>
@@ -368,6 +398,17 @@ final class Itmar_Block_Theme_Migration {
 		}
 
 		$assignable = self::get_requested_assignable_templates();
+		$excluded   = self::get_requested_exclusions();
+		$conflicts  = Itmar_BTM_Inspector::excluded_part_conflicts( $excluded['parts'], $excluded['templates'] );
+		if ( ! empty( $conflicts ) ) {
+			$lines = array();
+			foreach ( $conflicts as $part => $users ) {
+				$lines[] = sprintf( /* translators: 1: part slug, 2: items that still use it. */ __( '"%1$s" is still used by: %2$s', 'block-theme-migration' ), $part, implode( ', ', $users ) );
+			}
+			wp_die( esc_html( __( 'These template parts cannot be left out because items that stay in the ZIP use them.', 'block-theme-migration' ) . ' ' . implode( ' / ', $lines ) ) );
+		}
+		self::$export_excluded = $excluded;
+		self::$demo_export     = ! empty( $_POST['demo_mode'] ); // phpcs:ignore WordPress.Security.NonceVerification.Missing -- Verified above.
 		$filename   = wp_generate_block_templates_export_file();
 		if ( is_wp_error( $filename ) ) {
 			wp_die( esc_html( $filename->get_error_message() ) );
@@ -378,7 +419,7 @@ final class Itmar_Block_Theme_Migration {
 			wp_die( esc_html( $result->get_error_message() ) );
 		}
 
-		$download_name = sanitize_file_name( get_stylesheet() . '.zip' );
+		$download_name = sanitize_file_name( get_stylesheet() . ( self::$demo_export ? '-demo' : '' ) . '.zip' );
 		nocache_headers();
 		header( 'Content-Type: application/zip' );
 		header( 'Content-Disposition: attachment; filename="' . $download_name . '"' );
@@ -386,6 +427,54 @@ final class Itmar_Block_Theme_Migration {
 		readfile( $filename );
 		@unlink( $filename );
 		exit;
+	}
+
+	/** 書き出しから外す、テンプレートとパーツの slug */
+	private static function get_requested_exclusions(): array {
+		$out = array( 'templates' => array(), 'parts' => array() );
+		foreach ( array( 'templates' => 'exclude_templates', 'parts' => 'exclude_parts' ) as $key => $field ) {
+			$raw = isset( $_POST[ $field ] ) && is_array( $_POST[ $field ] ) ? wp_unslash( $_POST[ $field ] ) : array(); // phpcs:ignore WordPress.Security.NonceVerification.Missing -- Verified by check_admin_referer() in the caller.
+			foreach ( array_keys( $raw ) as $slug ) {
+				$slug = sanitize_title( $slug );
+				if ( '' !== $slug ) {
+					$out[ $key ][] = $slug;
+				}
+			}
+			$out[ $key ] = array_values( array_unique( $out[ $key ] ) );
+		}
+		return $out;
+	}
+
+	/** 書き出しの画面に、パーツの除外のチェックの表を出す */
+	private static function render_export_parts_table(): void {
+		$parts = get_block_templates( array(), 'wp_template_part' );
+		if ( empty( $parts ) ) {
+			return;
+		}
+		$inventory = Itmar_BTM_Inspector::inventory( Itmar_BTM_Inspector::collect_items() );
+		$unused    = array();
+		foreach ( $inventory['parts'] as $part ) {
+			$unused[ $part['slug'] ] = $part['unused'];
+		}
+		?>
+		<h3 style="margin-top:2em"><?php echo esc_html__( 'Template parts', 'block-theme-migration' ); ?></h3>
+		<table class="widefat striped" style="max-width: 1100px">
+			<thead><tr>
+				<th><?php echo esc_html__( 'Template part', 'block-theme-migration' ); ?></th>
+				<th><?php echo esc_html__( 'Leave out of the ZIP', 'block-theme-migration' ); ?></th>
+			</tr></thead>
+			<tbody>
+			<?php foreach ( $parts as $part ) : ?>
+				<tr>
+					<td><strong><?php echo esc_html( $part->title ?: $part->slug ); ?></strong><br><code><?php echo esc_html( $part->slug ); ?></code>
+						<?php if ( ! empty( $unused[ $part->slug ] ) ) : ?> <span class="description">— <?php echo esc_html__( 'not used by any template, part or pattern', 'block-theme-migration' ); ?></span><?php endif; ?></td>
+					<td><label><input type="checkbox" name="exclude_parts[<?php echo esc_attr( $part->slug ); ?>]" value="1"> <?php echo esc_html__( 'Leave out', 'block-theme-migration' ); ?></label></td>
+				</tr>
+			<?php endforeach; ?>
+			</tbody>
+		</table>
+		<p class="description"><?php echo esc_html__( 'A part that other items still use cannot be left out. See the Inspection tab for what is unused.', 'block-theme-migration' ); ?></p>
+		<?php
 	}
 
 	private static function get_requested_assignable_templates(): array {
@@ -438,13 +527,21 @@ final class Itmar_Block_Theme_Migration {
 		}
 
 		$deleted_sources = self::sanitize_source_deletions( $deleted_sources );
+		// 今回の書き出しだけ外すテンプレート（保存される「移植元の削除」とは別）。manifest・customTemplates からも消える
+		$deleted_sources = array_values( array_unique( array_merge( $deleted_sources, self::$export_excluded['templates'] ) ) );
 		foreach ( $deleted_sources as $source_slug ) {
 			$zip->deleteName( 'templates/' . $source_slug . '.html' );
+		}
+		foreach ( self::$export_excluded['parts'] as $part_slug ) {
+			$zip->deleteName( 'parts/' . $part_slug . '.html' );
 		}
 
 		$theme_slug = sanitize_key( get_stylesheet() );
 		$patterns   = array();
 		$checks     = array();
+		$removals   = array(); // 書き出し時の除去の記録（Itmar_BTM_Sanitizer）
+		Itmar_BTM_Sanitizer::set_demo( self::$demo_export );
+		wp_raise_memory_limit( 'admin' );
 		for ( $index = 0; $index < $zip->numFiles; $index++ ) {
 			$entry_name = $zip->getNameIndex( $index );
 			if ( ! is_string( $entry_name ) || ! preg_match( '#^(templates|parts)/[^/]+\.html$#', $entry_name ) ) {
@@ -455,12 +552,16 @@ final class Itmar_Block_Theme_Migration {
 				continue;
 			}
 			$converted = self::convert_synced_patterns( parse_blocks( $content ), $patterns, $theme_slug, $checks );
-			$new_html  = self::stable_serialize_blocks( $converted );
+			$new_html  = Itmar_BTM_Sanitizer::sanitize_content( self::stable_serialize_blocks( $converted ), $removals );
 			$zip->addFromString( $entry_name, $new_html );
 			self::scan_content( $entry_name, $new_html, $checks );
 		}
 
 		if ( ! empty( $patterns ) ) {
+			// 同期パターンから変換したパターンも、同じ除去を通す
+			foreach ( $patterns as $key => $pattern ) {
+				$patterns[ $key ]['content'] = Itmar_BTM_Sanitizer::sanitize_content( (string) $pattern['content'], $removals );
+			}
 			$zip->addEmptyDir( 'patterns' );
 			foreach ( $patterns as $pattern ) {
 				$header  = "<?php\n/**\n";
@@ -485,7 +586,13 @@ final class Itmar_Block_Theme_Migration {
 			);
 		}
 		$parts                       = self::get_template_part_manifest();
-		$theme_json['templateParts'] = self::merge_template_parts( $theme_json['templateParts'] ?? array(), $parts );
+		$theme_json['templateParts'] = array_values(
+			array_filter(
+				self::merge_template_parts( $theme_json['templateParts'] ?? array(), $parts ),
+				static fn( $part ): bool => ! is_array( $part ) || ! in_array( $part['name'] ?? '', self::$export_excluded['parts'], true )
+			)
+		);
+		$fonts = self::localize_font_files( $zip, $theme_json );
 		$zip->addFromString( 'theme.json', self::stable_wp_json_encode( $theme_json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) );
 
 		if ( null === $assignable ) {
@@ -503,8 +610,9 @@ final class Itmar_Block_Theme_Migration {
 			)
 		);
 		$template_manifest = self::get_template_manifest( $deleted_sources );
+		$declarations = Itmar_BTM_Inspector::declarations( self::$export_excluded );
 		$manifest = array(
-			'schemaVersion'       => 4,
+			'schemaVersion'       => 5,
 			'generatedAt'         => gmdate( 'c' ),
 			'theme'               => array( 'slug' => get_stylesheet(), 'name' => wp_get_theme()->get( 'Name' ) ),
 			'sourceSite'          => array( 'homeUrl' => home_url( '/' ) ),
@@ -522,10 +630,112 @@ final class Itmar_Block_Theme_Migration {
 			),
 			'checks'              => array_values( array_unique( $checks ) ),
 			'removedSourceTemplates' => $deleted_sources,
+			'excluded'            => self::$export_excluded,
+			'removals'            => Itmar_BTM_Sanitizer::summarize( $removals ),
+			'fonts'               => $fonts,
+			'demo'                => self::$demo_export,
+			'requires'            => $declarations['requires'],
+			'dataModel'           => $declarations['dataModel'],
 		);
 		$zip->addFromString( self::MANIFEST_FILE, self::stable_wp_json_encode( $manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) );
 		$zip->close();
 		return true;
+	}
+
+	/**
+	 * Font Library で入れたフォント（サイトの uploads にあるファイル）を、テーマの assets/fonts/<スラッグ>/ へコピーして、
+	 * theme.json の fontFace の src を、file:./assets/fonts/… に書き換える。
+	 * 書き出される theme.json には、サイトの Font Library のフォントも入っていて、src が、移植元のアドレス（https://…/uploads/fonts/…）のままだと、
+	 * 移植先で、フォントが読めない。テーマにすでに同じ内容のファイルがあるときは、それを指す（同じファイルを、2 度入れない）。
+	 * 外部のアドレス、見つからないファイルは、そのまま残し、記録に挙げる。
+	 *
+	 * @return array{localized:array,skipped:array}
+	 */
+	private static function localize_font_files( ZipArchive $zip, array &$theme_json ): array {
+		$report   = array( 'localized' => array(), 'skipped' => array() );
+		$families = $theme_json['settings']['typography']['fontFamilies'] ?? null;
+		if ( ! is_array( $families ) || empty( $families ) ) {
+			return $report;
+		}
+		$uploads  = wp_get_upload_dir();
+		$base_url = preg_replace( '#^https?:#', '', untrailingslashit( (string) $uploads['baseurl'] ) );
+		$base_dir = untrailingslashit( wp_normalize_path( (string) $uploads['basedir'] ) );
+		$base_dir_real = realpath( $base_dir );
+		// すでに ZIP にあるフォントファイルの内容（同じものは、もう一度入れない）
+		$existing = array();
+		for ( $i = 0; $i < $zip->numFiles; $i++ ) {
+			$name = $zip->getNameIndex( $i );
+			if ( is_string( $name ) && preg_match( '#^assets/fonts/.+\.(?:woff2?|ttf|otf)$#i', $name ) ) {
+				$data = $zip->getFromIndex( $i );
+				if ( false !== $data ) {
+					$existing[ md5( $data ) ] = $name;
+				}
+			}
+		}
+		$is_list = array_is_list( $families );
+		$groups  = $is_list ? array( $families ) : $families; // 一覧そのもの、または、{theme: […], custom: […]}
+		foreach ( $groups as $group_key => $list ) {
+			if ( ! is_array( $list ) ) {
+				continue;
+			}
+			foreach ( $list as $family_index => $family ) {
+				if ( ! is_array( $family ) || empty( $family['fontFace'] ) || ! is_array( $family['fontFace'] ) ) {
+					continue;
+				}
+				$slug = sanitize_title( (string) ( $family['slug'] ?? ( $family['name'] ?? 'font' ) ) );
+				foreach ( $family['fontFace'] as $face_index => $face ) {
+					if ( ! is_array( $face ) || empty( $face['src'] ) ) {
+						continue;
+					}
+					$sources = is_array( $face['src'] ) ? $face['src'] : array( $face['src'] );
+					$changed = false;
+					foreach ( $sources as $source_index => $src ) {
+						if ( ! is_string( $src ) || 0 === strpos( $src, 'file:' ) ) {
+							continue;
+						}
+						$path_part = (string) wp_parse_url( $src, PHP_URL_PATH );
+						$no_scheme = preg_replace( '#^https?:#', '', strtok( $src, '?#' ) );
+						$file      = '';
+						if ( 0 === strpos( $no_scheme, $base_url . '/' ) ) {
+							$file = $base_dir . '/' . rawurldecode( substr( $no_scheme, strlen( $base_url ) + 1 ) );
+						} elseif ( 0 === strpos( $path_part, wp_parse_url( (string) $uploads['baseurl'], PHP_URL_PATH ) . '/' ) && 0 === strpos( $src, '/' ) ) {
+							$file = $base_dir . '/' . rawurldecode( substr( $path_part, strlen( (string) wp_parse_url( (string) $uploads['baseurl'], PHP_URL_PATH ) ) + 1 ) );
+						}
+						$real = '' !== $file ? realpath( $file ) : false;
+						if ( false === $real || false === $base_dir_real || 0 !== strpos( wp_normalize_path( $real ), wp_normalize_path( $base_dir_real ) . '/' ) || ! is_file( $real ) ) {
+							$report['skipped'][] = array( 'slug' => $slug, 'src' => $src, 'reason' => '' === $file ? 'not a file in uploads' : 'file not found' );
+							continue;
+						}
+						$data = file_get_contents( $real );
+						if ( false === $data ) {
+							$report['skipped'][] = array( 'slug' => $slug, 'src' => $src, 'reason' => 'could not be read' );
+							continue;
+						}
+						$hash = md5( $data );
+						if ( isset( $existing[ $hash ] ) ) {
+							$dest = $existing[ $hash ];
+						} else {
+							$dest = 'assets/fonts/' . $slug . '/' . sanitize_file_name( basename( $real ) );
+							if ( false !== $zip->locateName( $dest ) ) {
+								$dest = 'assets/fonts/' . $slug . '/' . substr( $hash, 0, 8 ) . '-' . sanitize_file_name( basename( $real ) );
+							}
+							$zip->addFromString( $dest, $data );
+							$existing[ $hash ] = $dest;
+						}
+						$sources[ $source_index ] = 'file:./' . $dest;
+						$changed                  = true;
+						$report['localized'][]    = array( 'slug' => $slug, 'file' => $dest );
+					}
+					if ( $changed ) {
+						$face['src'] = is_array( $face['src'] ) ? array_values( $sources ) : $sources[0];
+						$list[ $family_index ]['fontFace'][ $face_index ] = $face;
+					}
+				}
+			}
+			$groups[ $group_key ] = $list;
+		}
+		$theme_json['settings']['typography']['fontFamilies'] = $is_list ? $groups[0] : $groups;
+		return $report;
 	}
 
 	private static function convert_synced_patterns( array $blocks, array &$patterns, string $theme_slug, array &$checks ): array {
@@ -556,6 +766,9 @@ final class Itmar_Block_Theme_Migration {
 	private static function get_template_part_manifest(): array {
 		$items = array();
 		foreach ( get_block_templates( array(), 'wp_template_part' ) as $part ) {
+			if ( in_array( $part->slug, self::$export_excluded['parts'], true ) ) {
+				continue;
+			}
 			$items[] = array( 'name' => $part->slug, 'title' => $part->title ?: $part->slug, 'area' => $part->area ?: 'uncategorized' );
 		}
 		return $items;
@@ -669,7 +882,7 @@ final class Itmar_Block_Theme_Migration {
 		}
 		$manifest = json_decode( (string) file_get_contents( $path ), true );
 		$schema_version = is_array( $manifest ) ? absint( $manifest['schemaVersion'] ?? 0 ) : 0;
-		if ( ! is_array( $manifest ) || ! in_array( $schema_version, array( 2, 3, 4 ), true ) ) {
+		if ( ! is_array( $manifest ) || ! in_array( $schema_version, array( 2, 3, 4, 5 ), true ) ) {
 			return new WP_Error( 'itmar_btm_manifest_invalid', __( 'The active theme migration manifest is missing or unsupported.', 'block-theme-migration' ) );
 		}
 		$manifest['theme']['installedSlug'] = get_stylesheet();
@@ -1033,7 +1246,6 @@ final class Itmar_Block_Theme_Migration {
 		$raw_mapping = isset( $_POST['mapping'] ) && is_array( $_POST['mapping'] ) ? wp_unslash( $_POST['mapping'] ) : array();
 		$raw_deletions = isset( $_POST['delete_source'] ) && is_array( $_POST['delete_source'] ) ? wp_unslash( $_POST['delete_source'] ) : array();
 		$mapping         = array();
-		$applied_mapping = array();
 		$items           = array();
 		$has_error       = false;
 
@@ -1051,14 +1263,14 @@ final class Itmar_Block_Theme_Migration {
 			}
 			$mapping[ $source ] = $target;
 		}
+		// 同じ宛先に、2つ以上の元が割り当てられたとき、最初の1件だけを使う（あとのものが、先のものを黙って上書きしない）
+		$mapping = self::resolve_mapping_collisions( $mapping, $items, $has_error );
 		$pattern_refs = self::get_theme_pattern_id_map( $manifest['editablePatterns'] ?? array() );
-		$link_map     = self::build_page_link_map( $mapping );
-		$source_home  = $manifest['sourceSite']['homeUrl'] ?? '';
 		self::save_mapping( $mapping );
 		$deleted_sources = self::sanitize_requested_source_deletions( $raw_deletions, $mapping );
 		self::save_source_deletions( $deleted_sources );
 		foreach ( $mapping as $source_slug => $target_spec ) {
-			$result = self::map_one_template( $source_slug, $target_spec, 'apply' === $mode, $overwrite, $pattern_refs, $link_map, $source_home, $manifest['theme']['slug'] ?? '' );
+			$result = self::map_one_template( $source_slug, $target_spec, 'apply' === $mode, $overwrite, $pattern_refs, $manifest['theme']['slug'] ?? '' );
 			if ( is_wp_error( $result ) ) {
 				$has_error = true;
 				$items[]   = $source_slug . ': ' . $result->get_error_message();
@@ -1067,30 +1279,11 @@ final class Itmar_Block_Theme_Migration {
 				if ( in_array( $source_slug, $deleted_sources, true ) ) {
 					$items[] = sprintf( __( 'templates/%s.html — will be removed from the next Distribution Export ZIP.', 'block-theme-migration' ), $source_slug );
 				}
-				if ( 'apply' === $mode ) {
-					$applied_mapping[ $source_slug ] = $target_spec;
-				}
 			}
-		}
-		$shared_mapping  = self::get_shared_mapping( $mapping, $applied_mapping, 'apply' === $mode );
-		$shared_link_map = self::build_page_link_map( $shared_mapping );
-		if ( 'apply' === $mode && count( $shared_mapping ) < count( $mapping ) ) {
-			$items[] = sprintf(
-				/* translators: %d: number of failed template mappings excluded from shared link rewriting. */
-				_n(
-					'%d mapping was not applied, so its links were not rewritten in shared theme content.',
-					'%d mappings were not applied, so their links were not rewritten in shared theme content.',
-					count( $mapping ) - count( $shared_mapping ),
-					'block-theme-migration'
-				),
-				count( $mapping ) - count( $shared_mapping )
-			);
 		}
 		$shared = self::process_shared_mapping_content(
 			$manifest,
-			$shared_mapping,
-			$shared_link_map,
-			$source_home,
+			$mapping,
 			'apply' === $mode,
 			$overwrite,
 			$pattern_refs
@@ -1107,13 +1300,6 @@ final class Itmar_Block_Theme_Migration {
 		);
 		wp_safe_redirect( add_query_arg( 'view', 'mapping', admin_url( 'tools.php?page=' . self::MENU_SLUG ) ) );
 		exit;
-	}
-
-	private static function get_shared_mapping( array $mapping, array $applied_mapping, bool $apply ): array {
-		if ( ! $apply ) {
-			return $mapping;
-		}
-		return array_intersect_key( $mapping, $applied_mapping );
 	}
 
 	private static function get_mapping_option_name(): string {
@@ -1183,7 +1369,64 @@ final class Itmar_Block_Theme_Migration {
 		return self::sanitize_source_deletions( $deleted );
 	}
 
-	private static function map_one_template( string $source_slug, string $target_spec, bool $apply, bool $overwrite, array $pattern_refs = array(), array $link_map = array(), string $source_home = '', string $package_theme = '' ) {
+	/**
+	 * 同じ宛先（作られるテンプレートの名前が同じ）に、2つ以上の元が割り当てられたとき、最初の1件だけを残す。
+	 * （そのままだと、あとのものが、先のものを黙って上書きする。たとえば、作業動画のテンプレートを、作品の宛先に割り当てると、
+	 * 作品のテンプレートが、作業動画の中身に置き換わる）
+	 * 宛先と同じ名前の元（single-works → single-works）が先に場所を取り、そのあとは、並びの順。
+	 *
+	 * @param array<string,string> $mapping   元の slug => 宛先（type|値）
+	 * @param array                $items     画面に出す結果（参照渡し）
+	 * @param bool                 $has_error エラーの有無（参照渡し）
+	 * @return array<string,string> 衝突したものを除いた割り当て
+	 */
+	public static function resolve_mapping_collisions( array $mapping, array &$items, bool &$has_error ): array {
+		$slug_of = array();
+		foreach ( $mapping as $source => $spec ) {
+			$destination = self::resolve_mapping_target( $spec );
+			if ( ! is_wp_error( $destination ) ) {
+				$slug_of[ $source ] = (string) $destination['templateSlug'];
+			}
+		}
+		$claimed = array();
+		foreach ( array( true, false ) as $same_name_pass ) {
+			foreach ( $mapping as $source => $spec ) {
+				if ( ! isset( $slug_of[ $source ] ) || ( ( $slug_of[ $source ] === $source ) !== $same_name_pass ) ) {
+					continue;
+				}
+				$key = $slug_of[ $source ];
+				if ( ! isset( $claimed[ $key ] ) ) {
+					$claimed[ $key ] = $source;
+					continue;
+				}
+				unset( $mapping[ $source ] );
+				$has_error = true;
+				$items[]   = sprintf(
+					/* translators: 1: template slug that was not applied, 2: template slug that is applied, 3: the shared destination template name. */
+					__( '%1$s: "%2$s" is already mapped to the same destination ("%3$s"), so this one was not applied. Choose a different destination, or "Do not map".', 'block-theme-migration' ),
+					$source,
+					$claimed[ $key ],
+					$key
+				);
+			}
+		}
+		return $mapping;
+	}
+
+	/**
+	 * そのテンプレートが、テーマの theme.json の customTemplates に、固定ページ用として登録されているか。
+	 * 登録されていれば、ページ編集画面の「テンプレート」で選べるので、ページのテンプレートの指定に、そのまま使える。
+	 */
+	public static function is_page_custom_template( string $slug ): bool {
+		$custom = WP_Theme_JSON_Resolver::get_theme_data()->get_custom_templates();
+		if ( ! is_array( $custom ) || empty( $custom[ $slug ] ) ) {
+			return false;
+		}
+		$post_types = $custom[ $slug ]['postTypes'] ?? array( 'page' );
+		return in_array( 'page', (array) $post_types, true );
+	}
+
+	private static function map_one_template( string $source_slug, string $target_spec, bool $apply, bool $overwrite, array $pattern_refs = array(), string $package_theme = '' ) {
 		$source = function_exists( 'get_block_file_template' ) ? get_block_file_template( get_stylesheet() . '//' . $source_slug, 'wp_template' ) : null;
 		if ( ! $source ) {
 			$source = get_block_template( get_stylesheet() . '//' . $source_slug, 'wp_template' );
@@ -1201,16 +1444,30 @@ final class Itmar_Block_Theme_Migration {
 		$title        = $destination['title'];
 		$page         = $destination['page'] ?? null;
 
+		// 固定ページへの割り当ては、テーマの customTemplates に、そのテンプレートがあれば、コピーを作らず、ページのテンプレートの指定を、そのテンプレートにする。
+		// コピーは、テーマを更新しても、古いまま残る（データベースが優先される）。直接指定なら、テーマのファイルの更新が、そのまま反映される。
+		if ( 'page' === $type && $page instanceof WP_Post && self::is_page_custom_template( $source_slug ) ) {
+			$direct = sprintf( '%1$s -> %2$s', $source_slug, $target_label ) . ' — ' . __( 'the page will use the theme template directly (no copy is made, so theme updates are reflected).', 'block-theme-migration' );
+			$old_copy = get_block_template( get_stylesheet() . '//' . $target_slug, 'wp_template' );
+			if ( $old_copy && ! empty( $old_copy->wp_id ) && self::template_matches_mapping( (int) $old_copy->wp_id, $source_slug, $target_spec ) ) {
+				$direct .= ' — ' . sprintf(
+					/* translators: %s: template slug. */
+					__( 'An older copy named "%s" remains in the list below. It is not used while the page names the theme template; move it to Trash.', 'block-theme-migration' ),
+					$target_slug
+				);
+			}
+			if ( ! $apply ) {
+				return $direct;
+			}
+			update_post_meta( $page->ID, '_wp_page_template', $source_slug );
+			return $direct . ' — ' . __( 'applied.', 'block-theme-migration' );
+		}
+
 		$source_content  = self::replace_pattern_references( $source->content, array(), $pattern_refs );
 		$refs_rewritten  = $source_content !== $source->content;
-		$link_result     = self::replace_mapped_page_links( $source_content, $link_map, $source_home );
-		$source_content  = $link_result['content'];
 		$message         = sprintf( '%1$s -> %2$s', $source_slug, $target_label );
 		if ( $refs_rewritten ) {
 			$message .= ' — ' . __( 'synced pattern references will be reconnected.', 'block-theme-migration' );
-		}
-		if ( $link_result['count'] > 0 ) {
-			$message .= ' — ' . sprintf( __( '%d internal link value(s) will be rewritten.', 'block-theme-migration' ), $link_result['count'] );
 		}
 		$existing_target = get_block_template( get_stylesheet() . '//' . $target_slug, 'wp_template' );
 		$managed_same = $existing_target && ! empty( $existing_target->wp_id ) && self::template_matches_mapping( (int) $existing_target->wp_id, $source_slug, $target_spec );
@@ -1224,7 +1481,7 @@ final class Itmar_Block_Theme_Migration {
 		if ( ! $apply ) {
 			return $message;
 		}
-		if ( $source_slug === $target_slug && ! $refs_rewritten && 0 === $link_result['count'] ) {
+		if ( $source_slug === $target_slug && ! $refs_rewritten ) {
 			return $message . ' — ' . __( 'already matches the WordPress template hierarchy.', 'block-theme-migration' );
 		}
 		$saved = self::save_template_override(
@@ -1243,46 +1500,23 @@ final class Itmar_Block_Theme_Migration {
 		return $message . ' — ' . __( 'applied.', 'block-theme-migration' );
 	}
 
-	private static function process_shared_mapping_content( array $manifest, array $mapping, array $link_map, string $source_home, bool $apply, bool $overwrite, array $pattern_refs ): array {
+	private static function process_shared_mapping_content( array $manifest, array $mapping, bool $apply, bool $overwrite, array $pattern_refs ): array {
 		$items     = array();
 		$has_error = false;
-
-		$imported = self::get_imported_pattern_ids( $manifest['editablePatterns'] ?? array() );
-		foreach ( $manifest['editablePatterns'] ?? array() as $pattern ) {
-			$post_id = $imported[ $pattern['sourceKey'] ] ?? 0;
-			$post    = $post_id ? get_post( $post_id ) : null;
-			if ( ! $post ) {
-				continue;
-			}
-			$link_result = self::replace_mapped_page_links( $post->post_content, $link_map, $source_home );
-			if ( 0 === $link_result['count'] ) {
-				continue;
-			}
-			$items[] = sprintf( __( 'Editable pattern "%1$s" — %2$d internal link value(s) %3$s.', 'block-theme-migration' ), $post->post_title, $link_result['count'], $apply ? __( 'rewritten', 'block-theme-migration' ) : __( 'will be rewritten', 'block-theme-migration' ) );
-			if ( $apply ) {
-				$result = wp_update_post( wp_slash( array( 'ID' => $post_id, 'post_content' => $link_result['content'] ) ), true );
-				if ( is_wp_error( $result ) ) {
-					$has_error = true;
-					$items[]   = $post->post_title . ': ' . $result->get_error_message();
-				}
-			}
-		}
 
 		foreach ( get_block_templates( array(), 'wp_template_part' ) as $part ) {
 			$file_part = function_exists( 'get_block_file_template' ) ? get_block_file_template( get_stylesheet() . '//' . $part->slug, 'wp_template_part' ) : null;
 			$source    = $file_part ?: $part;
 			$content   = self::replace_pattern_references( $source->content, array(), $pattern_refs );
-			$link_result = self::replace_mapped_page_links( $content, $link_map, $source_home );
-			if ( $link_result['content'] === $source->content ) {
+			if ( $content === $source->content ) {
 				continue;
 			}
-			$change_count = $link_result['count'] + ( $content !== $source->content ? 1 : 0 );
-			$items[] = sprintf( __( 'Template part "%1$s" — %2$d reference/link change(s) %3$s.', 'block-theme-migration' ), $source->title ?: $source->slug, $change_count, $apply ? __( 'applied', 'block-theme-migration' ) : __( 'will be applied', 'block-theme-migration' ) );
+			$items[] = sprintf( __( 'Template part "%1$s" — synced pattern reference(s) %2$s.', 'block-theme-migration' ), $source->title ?: $source->slug, $apply ? __( 'reconnected', 'block-theme-migration' ) : __( 'will be reconnected', 'block-theme-migration' ) );
 			if ( $apply ) {
 				$result = self::save_template_part_override(
 					$source->slug,
 					$source->title ?: $source->slug,
-					$link_result['content'],
+					$content,
 					$source->area ?? 'uncategorized',
 					$overwrite,
 					array(
@@ -1307,18 +1541,16 @@ final class Itmar_Block_Theme_Migration {
 			if ( ! $source ) {
 				continue;
 			}
-			$content     = self::replace_pattern_references( $source->content, array(), $pattern_refs );
-			$link_result = self::replace_mapped_page_links( $content, $link_map, $source_home );
-			if ( $link_result['content'] === $source->content ) {
+			$content = self::replace_pattern_references( $source->content, array(), $pattern_refs );
+			if ( $content === $source->content ) {
 				continue;
 			}
-			$change_count = $link_result['count'] + ( $content !== $source->content ? 1 : 0 );
-			$items[] = sprintf( __( 'Automatic template "%1$s" — %2$d reference/link change(s) %3$s.', 'block-theme-migration' ), $source->title ?: $slug, $change_count, $apply ? __( 'applied', 'block-theme-migration' ) : __( 'will be applied', 'block-theme-migration' ) );
+			$items[] = sprintf( __( 'Automatic template "%1$s" — synced pattern reference(s) %2$s.', 'block-theme-migration' ), $source->title ?: $slug, $apply ? __( 'reconnected', 'block-theme-migration' ) : __( 'will be reconnected', 'block-theme-migration' ) );
 			if ( $apply ) {
 				$result = self::save_template_override(
 					$slug,
 					$source->title ?: $slug,
-					$link_result['content'],
+					$content,
 					$overwrite,
 					array(
 						'source'  => 'theme-template:' . $slug,
@@ -1336,7 +1568,7 @@ final class Itmar_Block_Theme_Migration {
 		return array( 'items' => $items, 'hasError' => $has_error );
 	}
 
-	private static function save_template_override( string $slug, string $title, string $content, bool $overwrite, array $migration = array() ) {
+	public static function save_template_override( string $slug, string $title, string $content, bool $overwrite, array $migration = array() ) {
 		$existing = get_block_template( get_stylesheet() . '//' . $slug, 'wp_template' );
 		$existing_id = $existing && ! empty( $existing->wp_id ) ? (int) $existing->wp_id : 0;
 		$managed_same = $existing_id && ! empty( $migration ) && self::template_matches_mapping( $existing_id, $migration['source'] ?? '', $migration['target'] ?? '' );
@@ -1377,7 +1609,7 @@ final class Itmar_Block_Theme_Migration {
 		return $post_id;
 	}
 
-	private static function save_template_part_override( string $slug, string $title, string $content, string $area, bool $overwrite, array $migration = array() ) {
+	public static function save_template_part_override( string $slug, string $title, string $content, string $area, bool $overwrite, array $migration = array() ) {
 		$existing     = get_block_template( get_stylesheet() . '//' . $slug, 'wp_template_part' );
 		$existing_id  = $existing && ! empty( $existing->wp_id ) ? (int) $existing->wp_id : 0;
 		$managed_same = $existing_id && ! empty( $migration ) && self::template_matches_mapping( $existing_id, $migration['source'] ?? '', $migration['target'] ?? '' );
@@ -1461,173 +1693,7 @@ final class Itmar_Block_Theme_Migration {
 		);
 	}
 
-	private static function build_page_link_map( array $mapping ): array {
-		$map = array();
-		foreach ( $mapping as $source_template => $target_spec ) {
-			if ( ! str_starts_with( $source_template, 'page-' ) ) {
-				continue;
-			}
-			$destination = self::resolve_mapping_target( $target_spec );
-			if ( is_wp_error( $destination ) || 'page' !== $destination['type'] ) {
-				continue;
-			}
-			$page = $destination['page'];
-			$url  = get_permalink( $page );
-			if ( ! is_string( $url ) || '' === $url ) {
-				continue;
-			}
-			$path = wp_parse_url( $url, PHP_URL_PATH );
-			$map[ substr( $source_template, 5 ) ] = array(
-				'slug' => $page->post_name,
-				'url'  => $url,
-				'path' => is_string( $path ) && '' !== $path ? $path : '/' . $page->post_name . '/',
-			);
-		}
-		return $map;
-	}
-
-	private static function replace_mapped_page_links( string $content, array $link_map, string $source_home ): array {
-		if ( empty( $link_map ) ) {
-			return array( 'content' => $content, 'count' => 0 );
-		}
-		$count  = 0;
-		$blocks = parse_blocks( $content );
-		$prepared_blocks = self::prepare_blocks_for_migration( $blocks, 'mapped-links' );
-		if ( $prepared_blocks !== $blocks ) {
-			++$count;
-		}
-		$blocks = $prepared_blocks;
-		$blocks = self::replace_mapped_page_links_in_blocks( $blocks, $link_map, $source_home, $count );
-		return array( 'content' => $count > 0 ? self::stable_serialize_blocks( $blocks ) : $content, 'count' => $count );
-	}
-
-	private static function replace_mapped_page_links_in_blocks( array $blocks, array $link_map, string $source_home, int &$count ): array {
-		foreach ( $blocks as &$block ) {
-			$block_name = is_string( $block['blockName'] ?? null ) ? $block['blockName'] : null;
-			if ( ! empty( $block['attrs'] ) && is_array( $block['attrs'] ) ) {
-				$block['attrs'] = self::replace_links_in_attribute_array( $block['attrs'], $link_map, $source_home, $count );
-			}
-			if ( isset( $block['innerContent'] ) && is_array( $block['innerContent'] ) ) {
-				foreach ( $block['innerContent'] as &$fragment ) {
-					if ( is_string( $fragment ) ) {
-						$fragment = self::replace_links_in_html( $fragment, $link_map, $source_home, $count, $block_name );
-					}
-				}
-				unset( $fragment );
-			}
-			if ( isset( $block['innerHTML'] ) && is_string( $block['innerHTML'] ) ) {
-				$inner_count = 0;
-				$block['innerHTML'] = self::replace_links_in_html( $block['innerHTML'], $link_map, $source_home, $inner_count, $block_name );
-			}
-			if ( ! empty( $block['innerBlocks'] ) ) {
-				$block['innerBlocks'] = self::replace_mapped_page_links_in_blocks( $block['innerBlocks'], $link_map, $source_home, $count );
-			}
-		}
-		unset( $block );
-		return $blocks;
-	}
-
-	private static function replace_links_in_attribute_array( array $attributes, array $link_map, string $source_home, int &$count ): array {
-		foreach ( $attributes as $key => &$value ) {
-			$value = self::replace_links_in_json_value( $value, (string) $key, $link_map, $source_home, $count );
-		}
-		unset( $value );
-		return $attributes;
-	}
-
-	private static function replace_links_in_json_value( mixed $value, ?string $key, array $link_map, string $source_home, int &$count ): mixed {
-		if ( is_array( $value ) ) {
-			foreach ( $value as $child_key => &$child_value ) {
-				$child_value = self::replace_links_in_json_value( $child_value, (string) $child_key, $link_map, $source_home, $count );
-			}
-			unset( $child_value );
-			return $value;
-		}
-
-		if ( is_object( $value ) ) {
-			foreach ( get_object_vars( $value ) as $child_key => $child_value ) {
-				$value->{$child_key} = self::replace_links_in_json_value( $child_value, (string) $child_key, $link_map, $source_home, $count );
-			}
-			return $value;
-		}
-
-		if ( ! is_string( $value ) || null === $key ) {
-			return $value;
-		}
-
-		if ( 'selectedSlug' === $key && isset( $link_map[ $value ] ) ) {
-			++$count;
-			return $link_map[ $value ]['slug'];
-		}
-
-		$link_keys = array( 'href', 'url', 'link', 'redirectUrl', 'redirectPath', 'selectedPageUrl', 'selectedPageLink' );
-		return in_array( $key, $link_keys, true )
-			? self::replace_one_link_value( $value, $link_map, $source_home, $count )
-			: $value;
-	}
-
-	private static function replace_links_in_html( string $html, array $link_map, string $source_home, int &$count, ?string $block_name = null ): string {
-		$object_attribute_keys = self::get_registered_object_attribute_keys( $block_name );
-		$shape_restored        = false;
-		$html = (string) preg_replace_callback(
-			'/((?:href|action|formaction|data-logon_url|data-link-url|data-url|data-selected_page)\s*=\s*["\'])([^"\']+)(["\'])/i',
-			static function ( array $match ) use ( $link_map, $source_home, &$count ): string {
-				$decoded   = html_entity_decode( $match[2], ENT_QUOTES, 'UTF-8' );
-				$rewritten = self::replace_one_link_value( $decoded, $link_map, $source_home, $count );
-				return $match[1] . esc_attr( $rewritten ) . $match[3];
-			},
-			$html
-		);
-
-		return (string) preg_replace_callback(
-			'/(\sdata-(?:[a-z0-9_-]*attributes)\s*=\s*)(["\'])(.*?)\2/is',
-			static function ( array $match ) use ( $link_map, $source_home, &$count, $object_attribute_keys, &$shape_restored ): string {
-				$decoded = html_entity_decode( $match[3], ENT_QUOTES, 'UTF-8' );
-				$data    = json_decode( $decoded );
-				if ( JSON_ERROR_NONE !== json_last_error() || ( ! is_array( $data ) && ! is_object( $data ) ) ) {
-					return $match[0];
-				}
-				if ( ! $shape_restored && is_object( $data ) && preg_match( '/\sdata-attributes\s*=/i', $match[1] ) ) {
-					foreach ( $object_attribute_keys as $attribute_key ) {
-						if ( property_exists( $data, $attribute_key ) && is_array( $data->{$attribute_key} ) && array() === $data->{$attribute_key} ) {
-							$data->{$attribute_key} = (object) array();
-						}
-					}
-					$shape_restored = true;
-				}
-				$count_before = $count;
-				$rewritten    = self::replace_links_in_json_value( $data, null, $link_map, $source_home, $count );
-				$json = self::stable_wp_json_encode( $rewritten, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
-				if ( ! is_string( $json ) || $json === $decoded ) {
-					return $match[0];
-				}
-				if ( $count === $count_before ) {
-					++$count;
-				}
-				return $match[1] . $match[2] . esc_attr( $json ) . $match[2];
-			},
-			$html
-		);
-	}
-
-	private static function get_registered_object_attribute_keys( ?string $block_name ): array {
-		if ( null === $block_name ) {
-			return array();
-		}
-		$block_type = WP_Block_Type_Registry::get_instance()->get_registered( $block_name );
-		if ( ! $block_type || ! is_array( $block_type->attributes ) ) {
-			return array();
-		}
-		$keys = array();
-		foreach ( $block_type->attributes as $key => $schema ) {
-			if ( is_array( $schema ) && 'object' === ( $schema['type'] ?? null ) ) {
-				$keys[] = (string) $key;
-			}
-		}
-		return $keys;
-	}
-
-	private static function stable_serialize_blocks( array $blocks ): string {
+	public static function stable_serialize_blocks( array $blocks ): string {
 		$blocks   = self::prepare_blocks_for_migration( $blocks, 'serialization' );
 		$blocks   = self::restore_registered_object_attribute_shapes( $blocks );
 		$previous = ini_get( 'serialize_precision' );
@@ -1677,7 +1743,7 @@ final class Itmar_Block_Theme_Migration {
 		return $blocks;
 	}
 
-	private static function stable_wp_json_encode( mixed $value, int $flags = 0, int $depth = 512 ): string|false {
+	public static function stable_wp_json_encode( mixed $value, int $flags = 0, int $depth = 512 ): string|false {
 		$previous = ini_get( 'serialize_precision' );
 		$changed  = false !== $previous && '-1' !== (string) $previous && false !== ini_set( 'serialize_precision', '-1' );
 		try {
@@ -1689,60 +1755,13 @@ final class Itmar_Block_Theme_Migration {
 		}
 	}
 
-	private static function replace_one_link_value( string $value, array $link_map, string $source_home, int &$count ): string {
-		$parsed_path = wp_parse_url( $value, PHP_URL_PATH );
-		$path        = is_string( $parsed_path ) ? $parsed_path : '';
-		$placeholder = str_starts_with( $value, '[home_url]' );
-		if ( $placeholder ) {
-			$path = substr( $value, strlen( '[home_url]' ) );
-		}
-		$source_slug = basename( untrailingslashit( $path ) );
-		if ( '' === $source_slug || ! isset( $link_map[ $source_slug ] ) ) {
-			return $value;
-		}
-
-		$is_absolute = (bool) preg_match( '#^https?://#i', $value );
-		if ( $is_absolute ) {
-			$host        = strtolower( (string) wp_parse_url( $value, PHP_URL_HOST ) );
-			$source_host = strtolower( (string) wp_parse_url( $source_home, PHP_URL_HOST ) );
-			$target_host = strtolower( (string) wp_parse_url( home_url( '/' ), PHP_URL_HOST ) );
-			$is_local    = str_ends_with( $host, '.local' ) || 'localhost' === $host;
-			if ( '' !== $source_host && $host !== $source_host && $host !== $target_host && ! $is_local ) {
-				return $value;
-			}
-		}
-
-		$destination = $link_map[ $source_slug ];
-		$query       = wp_parse_url( $value, PHP_URL_QUERY );
-		$fragment    = wp_parse_url( $value, PHP_URL_FRAGMENT );
-		if ( $placeholder ) {
-			$replacement = '[home_url]' . $destination['path'];
-		} elseif ( $is_absolute ) {
-			$replacement = $destination['url'];
-		} elseif ( str_starts_with( $value, '/' ) ) {
-			$replacement = $destination['path'];
-		} else {
-			$replacement = $destination['slug'];
-		}
-		if ( is_string( $query ) && '' !== $query ) {
-			$replacement .= ( str_contains( $replacement, '?' ) ? '&' : '?' ) . $query;
-		}
-		if ( is_string( $fragment ) && '' !== $fragment ) {
-			$replacement .= '#' . $fragment;
-		}
-		if ( $replacement !== $value ) {
-			++$count;
-		}
-		return $replacement;
-	}
-
 	private static function template_matches_mapping( int $post_id, string $source, string $target ): bool {
 		return get_post_meta( $post_id, self::TEMPLATE_SOURCE_META, true ) === sanitize_title( $source )
 			&& get_post_meta( $post_id, self::TEMPLATE_TARGET_META, true ) === sanitize_text_field( $target )
 			&& get_post_meta( $post_id, self::TEMPLATE_THEME_META, true ) === get_stylesheet();
 	}
 
-	private static function find_managed_template_id( string $source, string $target, string $post_type = 'wp_template' ): int {
+	public static function find_managed_template_id( string $source, string $target, string $post_type = 'wp_template' ): int {
 		$posts = get_posts(
 			array(
 				'post_type'      => in_array( $post_type, array( 'wp_template', 'wp_template_part' ), true ) ? $post_type : 'wp_template',
@@ -1769,7 +1788,7 @@ final class Itmar_Block_Theme_Migration {
 		);
 	}
 
-	private static function get_managed_templates( string $source = '', string $post_type = '' ): array {
+	public static function get_managed_templates( string $source = '', string $post_type = '' ): array {
 		$meta_query = array(
 			array( 'key' => self::TEMPLATE_THEME_META, 'value' => get_stylesheet() ),
 			array( 'key' => self::TEMPLATE_SOURCE_META, 'compare' => 'EXISTS' ),

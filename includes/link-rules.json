@@ -1,0 +1,95 @@
+{
+	"_comment": "ブロックごとの、リンク・参照・サイト固有値を持つ属性の規則（docs/link-attribute-survey.md §5）。kind の意味は同文書を参照。",
+	"itmar/design-button": [
+		{ "path": "selectedPageUrl", "kind": "page-url" },
+		{ "path": "selectedSlug", "kind": "page", "when": { "linkKind": "fixed" } },
+		{ "path": "selectedSlug", "kind": "post-type", "when": { "linkKind": [ "archive", "single" ] } },
+		{ "path": "media", "kind": "media", "html": "remove:figure" },
+		{ "path": "mediaID", "kind": "content-id" }
+	],
+	"itmar/design-title": [
+		{ "path": "selectedPageUrl", "kind": "page-url", "html": "removeattr:href" },
+		{ "path": "selectedSlug", "kind": "page", "when": { "linkKind": "fixed" }, "html": "removeattr:href" },
+		{ "path": "selectedSlug", "kind": "post-type", "when": { "linkKind": [ "archive", "single" ] } }
+	],
+	"itmar/design-group": [
+		{ "path": "selectedPageUrl", "kind": "page-url" }
+	],
+	"itmar/coustom-login": [
+		{ "path": "redirectUrl", "kind": "page-url" },
+		{ "path": "redirectPath", "kind": "page-url" },
+		{ "path": "selectedSlug", "kind": "page" }
+	],
+	"itmar/thanks-figure-block": [
+		{ "path": "selectedPageUrl", "kind": "page-url" },
+		{ "path": "selectedSlug", "kind": "page" }
+	],
+	"itmar/pickup-posts": [
+		{ "path": "selectedSlug", "kind": "post-type" },
+		{ "path": "selectedRest", "kind": "post-type-rest" },
+		{ "path": "dispTaxonomies", "kind": "taxonomy" },
+		{ "path": "choiceTerms", "kind": "term" },
+		{ "path": "choiceFields", "kind": "field", "skip": [ "title", "date", "content", "excerpt", "featured_media", "link" ] },
+		{ "path": "searchFields", "kind": "field" },
+		{ "path": "blockMap", "kind": "field-keys" },
+		{ "path": "posts", "kind": "content-data" },
+		{ "path": "blocksAttributesArray", "kind": "embedded-blocks" },
+		{ "path": "emptyMessageAttributes", "kind": "embedded-attributes", "block": "itmar/design-title" }
+	],
+	"itmar/product-block": [
+		{ "path": "storeUrl", "kind": "service-setting" },
+		{ "path": "callbackUrl", "kind": "service-setting" },
+		{ "path": "blocksAttributesArray", "kind": "embedded-blocks" }
+	],
+	"itmar/cart-block": [
+		{ "path": "blocksAttributesArray", "kind": "embedded-blocks" }
+	],
+	"itmar/post-pagenation": [
+		{ "path": "forwardBlockAttributes", "kind": "embedded-attributes", "block": "itmar/design-button" },
+		{ "path": "backBlockAttributes", "kind": "embedded-attributes", "block": "itmar/design-button" },
+		{ "path": "dummyBlockAttributes", "kind": "embedded-attributes", "block": "itmar/design-button" },
+		{ "path": "numBlockAttributes", "kind": "embedded-attributes", "block": "itmar/design-button" },
+		{ "path": "forwardTitleAttributes", "kind": "embedded-attributes", "block": "itmar/design-title" },
+		{ "path": "backTitleAttributes", "kind": "embedded-attributes", "block": "itmar/design-title" }
+	],
+	"itmar/post-filter": [
+		{ "path": "titleAttributes", "kind": "embedded-attributes", "block": "itmar/design-title" },
+		{ "path": "searchButtonAttributes", "kind": "embedded-attributes", "block": "itmar/design-button" },
+		{ "path": "dayAttributes", "kind": "embedded-blocks" },
+		{ "path": "searchFields", "kind": "field" }
+	],
+	"itmar/post-crumbs": [
+		{ "path": "crumbBlockAttributes", "kind": "embedded-attributes", "block": "itmar/design-title" },
+		{ "path": "postTypeName", "kind": "post-type-label" }
+	],
+	"itmar/markdown-block": [
+		{ "path": "element_style_obj.*", "kind": "embedded-attributes", "block": "itmar/design-title" }
+	],
+	"itmar/reservation-block": [
+		{ "path": "resourceId", "kind": "content-id" },
+		{ "path": "resourceSlug", "kind": "content-ref" },
+		{ "path": "closedWeekdays", "kind": "content-data" },
+		{ "path": "selectedSlug", "kind": "post-type" },
+		{ "path": "selectedRest", "kind": "post-type-rest" }
+	],
+	"itmar/masonry-mv": [
+		{ "path": "default_val.media", "kind": "media", "html": "attr:data-default-media" },
+		{ "path": "mobile_val.media", "kind": "media", "html": "attr:data-mobile-media" },
+		{ "path": "default_val.mediaID", "kind": "content-id" },
+		{ "path": "mobile_val.mediaID", "kind": "content-id" }
+	],
+	"itmar/fade-mv": [
+		{ "path": "default_val.media", "kind": "media", "html": "attr:data-default-media" },
+		{ "path": "mobile_val.media", "kind": "media", "html": "attr:data-mobile-media" },
+		{ "path": "default_val.mediaID", "kind": "content-id" },
+		{ "path": "mobile_val.mediaID", "kind": "content-id" }
+	],
+	"core/navigation": [
+		{ "path": "ref", "kind": "navigation" }
+	],
+	"core/image": [
+		{ "path": "id", "kind": "media" },
+		{ "path": "url", "kind": "media" },
+		{ "path": "href", "kind": "page-url", "when": { "linkDestination": "custom" } }
+	]
+}

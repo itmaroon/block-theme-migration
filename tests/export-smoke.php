@@ -62,7 +62,7 @@ try {
 	}
 	$zip->close();
 
-	if ( ! is_array( $manifest ) || 4 !== ( $manifest['schemaVersion'] ?? null ) ) {
+	if ( ! is_array( $manifest ) || 5 !== ( $manifest['schemaVersion'] ?? null ) ) {
 		throw new RuntimeException( 'Manifest was not generated.' );
 	}
 	if ( home_url( '/' ) !== ( $manifest['sourceSite']['homeUrl'] ?? '' ) ) {
